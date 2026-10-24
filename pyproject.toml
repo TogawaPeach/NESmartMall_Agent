@@ -5,7 +5,10 @@ description = "经纬智选商城 Agent 客服 Python 服务"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115,<1",
+    "langchain>=1,<2",
+    "langchain-deepseek>=1,<2",
     "pydantic-settings>=2.6,<3",
+    "python-dotenv>=1,<2",
     "uvicorn[standard]>=0.30,<1",
 ]
 

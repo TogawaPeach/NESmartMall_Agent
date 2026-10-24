@@ -8,7 +8,6 @@ __pycache__/
 htmlcov/
 .env
 .env.*
-!.env.example
 *.log
 .DS_Store
 data/

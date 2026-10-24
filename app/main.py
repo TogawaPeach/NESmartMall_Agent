@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from app import __version__
+from app.api.agent import router as agent_router
 from app.settings import Settings
 
 
@@ -18,6 +19,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc" if publish_docs else None,
         openapi_url="/openapi.json" if publish_docs else None,
     )
+    application.include_router(agent_router)
     return application
 
 
