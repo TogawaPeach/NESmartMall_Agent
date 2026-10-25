@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api.agent import router as agent_router
+from app.services.nacos_service import nacos_lifespan
 from app.settings import Settings
 
 
@@ -12,6 +13,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     publish_docs = settings.app_env != "production"
 
     application = FastAPI(
+        lifespan=nacos_lifespan,
         title=settings.app_name,
         version=__version__,
         description="经纬智选商城 Agent 客服服务。",

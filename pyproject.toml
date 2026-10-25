@@ -7,8 +7,11 @@ dependencies = [
     "fastapi>=0.115,<1",
     "langchain>=1,<2",
     "langchain-deepseek>=1,<2",
+    "nacos-sdk-python>=2,<3",
     "pydantic-settings>=2.6,<3",
     "python-dotenv>=1,<2",
+    "redis>=8.1.0,<9",
+    "uplink[aiohttp]>=0.10,<1",
     "uvicorn[standard]>=0.30,<1",
 ]
 
