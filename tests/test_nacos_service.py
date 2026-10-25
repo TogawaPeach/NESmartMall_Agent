@@ -3,11 +3,25 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.asyncio import Redis
 from v2.nacos import NacosNamingService
 
 
 @pytest.fixture
-def naming_client(monkeypatch):
+def redis_client(monkeypatch):
+    client = AsyncMock(spec=Redis)
+    client.ping = AsyncMock(return_value=True)
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = False
+    monkeypatch.setattr(Redis, "from_url", Mock(return_value=client))
+    return client
+
+
+@pytest.fixture
+def naming_client(monkeypatch, redis_client):
+    # 单独运行本文件时，模型初始化也使用测试配置，不读取真实 .env。
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-api-key")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     config = {
         "NACOS_SERVER_ADDR": "127.0.0.1:8848",
         "NACOS_NAMESPACE_ID": "test-namespace-id",
@@ -41,9 +55,12 @@ def application():
     return create_app(Settings(_env_file=None, app_env="test"))
 
 
-def test_startup_registers_configured_instance_and_shutdown_removes_it(naming_client):
+def test_startup_registers_configured_instance_and_shutdown_removes_it(naming_client, redis_client):
     client, factory = naming_client
-    with TestClient(application()):
+    app = application()
+    with TestClient(app):
+        assert app.state.context_repository.redis is redis_client
+        redis_client.ping.assert_awaited_once()
         factory.assert_awaited_once()
         config = factory.await_args.args[0]
         assert config.namespace_id == "test-namespace-id"
@@ -70,10 +87,11 @@ def test_startup_registers_configured_instance_and_shutdown_removes_it(naming_cl
         "deregister_instance",
         "shutdown",
     ]
+    redis_client.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.parametrize("raises", [False, True])
-def test_registration_failure_stops_startup_and_closes_client(naming_client, raises):
+def test_registration_failure_stops_startup_and_closes_client(naming_client, redis_client, raises):
     client, _factory = naming_client
     if raises:
         client.register_instance.side_effect = RuntimeError("registration unavailable")
@@ -86,6 +104,19 @@ def test_registration_failure_stops_startup_and_closes_client(naming_client, rai
 
     client.deregister_instance.assert_not_awaited()
     client.shutdown.assert_awaited_once()
+    redis_client.__aexit__.assert_awaited_once()
+
+
+def test_redis_failure_prevents_nacos_registration(naming_client, redis_client):
+    _client, factory = naming_client
+    redis_client.ping.side_effect = ConnectionError("redis unavailable")
+
+    with pytest.raises(ConnectionError, match="redis unavailable"):
+        with TestClient(application()):
+            pytest.fail("Redis failure must prevent startup")
+
+    factory.assert_not_awaited()
+    redis_client.__aexit__.assert_awaited_once()
 
 
 def test_deregistration_failure_still_closes_client(naming_client):

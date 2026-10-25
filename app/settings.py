@@ -20,3 +20,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="mall-agent-service", min_length=1)
     app_env: Literal["local", "test", "production"] = "local"
+    redis_url: str = Field(
+        default="redis://localhost:6379/1",
+        min_length=1,
+    )

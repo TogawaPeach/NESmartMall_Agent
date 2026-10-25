@@ -37,8 +37,14 @@ def stream_response(chunks: AsyncIterator[str]) -> StreamingResponse:
 @router.post("/guide/turns/stream")
 async def stream_guide_turn(request: Request):
     data = await request.json()
+    repository = request.app.state.context_repository
+
     return stream_response(
-        stream_guide_answer(data["userId"], data["text"])
+        stream_guide_answer(
+            str(data["userId"]),
+            data["text"],
+            repository,
+        )
     )
 
 
@@ -46,6 +52,12 @@ async def stream_guide_turn(request: Request):
 @router.post("/support/turns/stream")
 async def stream_support_turn(request: Request):
     data = await request.json()
+    repository = request.app.state.context_repository
+
     return stream_response(
-        stream_support_answer(data["userId"], data["text"])
+        stream_support_answer(
+            str(data["userId"]),
+            data["text"],
+            repository,
+        )
     )

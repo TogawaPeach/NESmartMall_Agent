@@ -1,9 +1,12 @@
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+
+from app.repositories.context_repository import AgentType, ContextRepository
 
 # 加载项目根目录的 .env
 env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -49,27 +52,56 @@ support_agent = create_agent(
 )
 
 
-# 导购 Service：只调用导购 Agent
-async def stream_guide_answer(user_id: str, text: str):
-    messages = {"messages": [{"role": "user", "content": text}]}
+# 两个 Agent 共用历史读写和流式回答逻辑
+async def _stream_answer(
+    user_id: str,
+    text: str,
+    agent_type: AgentType,
+    repository: ContextRepository,
+) -> AsyncIterator[str]:
+    # 读取历史，并追加本轮用户消息
+    history = await repository.get_history(user_id, agent_type)
+    history.append({"role": "user", "content": text})
 
-    async for chunk, _metadata in guide_agent.astream(
-        messages,
+    agent = guide_agent if agent_type == "guide" else support_agent
+    answer_parts: list[str] = []
+
+    async for chunk, _metadata in agent.astream(
+        {"messages": history},
         stream_mode="messages",
     ):
         for block in chunk.content_blocks:
             if block["type"] == "text":
-                yield block["text"]
+                delta = block["text"]
+                answer_parts.append(delta)
+                yield delta
+
+    # 流式生成正常结束后，保存完整回复和历史
+    history.append(
+        {
+            "role": "assistant",
+            "content": "".join(answer_parts),
+        }
+    )
+
+    await repository.save_history(user_id, agent_type, history)
 
 
-# 客服 Service：只调用客服 Agent
-async def stream_support_answer(user_id: str, text: str):
-    messages = {"messages": [{"role": "user", "content": text}]}
+# 导购 Service
+async def stream_guide_answer(
+    user_id: str,
+    text: str,
+    repository: ContextRepository,
+) -> AsyncIterator[str]:
+    async for delta in _stream_answer(user_id, text, "guide", repository):
+        yield delta
 
-    async for chunk, _metadata in support_agent.astream(
-        messages,
-        stream_mode="messages",
-    ):
-        for block in chunk.content_blocks:
-            if block["type"] == "text":
-                yield block["text"]
+
+# 客服 Service
+async def stream_support_answer(
+    user_id: str,
+    text: str,
+    repository: ContextRepository,
+) -> AsyncIterator[str]:
+    async for delta in _stream_answer(user_id, text, "support", repository):
+        yield delta
