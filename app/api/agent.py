@@ -59,5 +59,6 @@ async def stream_support_turn(request: Request):
             str(data["userId"]),
             data["text"],
             repository,
+            authorization=request.headers.get("Authorization", ""),
         )
     )

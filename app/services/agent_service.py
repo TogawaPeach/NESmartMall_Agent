@@ -7,7 +7,9 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 from app.repositories.context_repository import AgentType, ContextRepository
+from app.schemas.agent_context import AgentContext
 from app.tools.knowledge import create_knowledge_tool
+from app.tools.order import create_order_tool
 
 # 加载项目根目录的 .env
 env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -23,6 +25,7 @@ model = init_chat_model(
 )
 
 query_knowledge = create_knowledge_tool(model)
+query_order = create_order_tool(os.getenv("MALL_GATEWAY_BASE_URL", "http://localhost:8080"))
 
 KNOWLEDGE_PROMPT = (
     "涉及商城政策、规则及已入库的商品说明时，必须先调用 query_knowledge。"
@@ -54,14 +57,14 @@ guide_agent = create_agent(
 # 客服 Agent：负责商品使用及售前售后咨询
 support_agent = create_agent(
     model=model,
-    tools=[query_knowledge],
+    tools=[query_knowledge, query_order],
     system_prompt=(
         "你是经纬智选商城的资深客服助手，语气亲切、回答简洁，不用网络烂梗。请用中文回答。严禁输出MarkDown格式文本"
         "我们的商城是一个测绘工具B2C平台，只有一个商家，专门卖关于测绘的用品"
         "我们的商城有两个智能客服，一个用于咨询商品使用和售前售后，就是你，另一个用于推荐商品"
         "你的职责是围绕用户提供的商品和问题，处理商品使用及售前售后咨询。"
         "缺少商品信息或问题细节时先询问，不假定已经收到商品页上下文。"
-        "当前已接入商城知识库，但没有实时商品、订单、物流或售后操作工具，"
+        "当前已接入商城知识库，订单查询，没有售后操作工具，"
         "不要声称已经查询或修改订单等业务数据，不编造商城政策、订单状态或物流轨迹，"
         "不承诺退款到账、审批通过或人工已接通。"
         "你尽可以回答作为一个客服该回答的问题，其他的一概不回答，把话题拉回来"
@@ -76,6 +79,7 @@ async def _stream_answer(
     text: str,
     agent_type: AgentType,
     repository: ContextRepository,
+    authorization: str = "",
 ) -> AsyncIterator[str]:
     # 读取历史，并追加本轮用户消息
     history = await repository.get_history(user_id, agent_type)
@@ -86,6 +90,7 @@ async def _stream_answer(
 
     async for chunk, metadata in agent.astream(
         {"messages": history},
+        context=AgentContext(authorization=authorization) if agent_type == "support" else None,
         stream_mode="messages",
     ):
         # 只转发 Agent 主模型输出，不转发工具内部模型输出
@@ -124,6 +129,7 @@ async def stream_support_answer(
     user_id: str,
     text: str,
     repository: ContextRepository,
+    authorization: str = "",
 ) -> AsyncIterator[str]:
-    async for delta in _stream_answer(user_id, text, "support", repository):
+    async for delta in _stream_answer(user_id, text, "support", repository, authorization):
         yield delta

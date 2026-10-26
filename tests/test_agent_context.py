@@ -46,7 +46,7 @@ def test_stream_endpoint_remembers_turns_and_saves_complete_answers(
     requests = []
 
     def make_agent(scene):
-        async def stream(payload, *, stream_mode):
+        async def stream(payload, *, stream_mode, context=None):
             assert stream_mode == "messages"
             requests.append((scene, [dict(message) for message in payload["messages"]]))
             yield AIMessageChunk(content="改写后的内部检索问题"), {
@@ -114,7 +114,7 @@ def test_interrupted_stream_preserves_previous_history(service, monkeypatch, age
     )
     redis.values[key] = original
 
-    async def stream(_payload, *, stream_mode):
+    async def stream(_payload, *, stream_mode, context=None):
         yield AIMessageChunk(content="未完成的回答"), {"langgraph_node": "model"}
         raise failure("stream interrupted")
 
@@ -184,3 +184,35 @@ def test_real_agent_graph_keeps_rewrite_and_evidence_out_of_reply_and_history(
         {"role": "user", "content": "新疆运费怎么算？"},
         {"role": "assistant", "content": "新疆每单收取25元首程配送运费。"},
     ]
+
+
+def test_support_endpoint_passes_current_jwt_without_saving_it(service, monkeypatch):
+    from app.api.agent import router
+
+    redis = MemoryRedis()
+    app = FastAPI()
+    app.state.context_repository = ContextRepository(redis)
+    app.include_router(router)
+    authorizations = []
+
+    async def stream(payload, *, stream_mode, context=None):
+        assert context is not None
+        authorizations.append(context.authorization)
+        assert "Bearer" not in str(payload)
+        yield AIMessageChunk(content="已查询订单。"), {"langgraph_node": "model"}
+
+    monkeypatch.setattr(service, "support_agent", SimpleNamespace(astream=stream))
+
+    with TestClient(app) as client:
+        for token in ("Bearer initial-jwt", "Bearer refreshed-jwt"):
+            response = client.post(
+                "/internal/support/turns/stream",
+                json={"userId": "1", "text": "查询订单 JW1"},
+                headers={"Authorization": token},
+            )
+            assert response.status_code == 200
+            assert "已查询订单。" in response.text
+            assert token not in response.text
+
+    assert authorizations == ["Bearer initial-jwt", "Bearer refreshed-jwt"]
+    assert "Bearer" not in str(redis.values)
