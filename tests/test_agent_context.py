@@ -49,10 +49,16 @@ def test_stream_endpoint_remembers_turns_and_saves_complete_answers(
         async def stream(payload, *, stream_mode):
             assert stream_mode == "messages"
             requests.append((scene, [dict(message) for message in payload["messages"]]))
-            yield AIMessageChunk(content=[{"type": "reasoning", "reasoning": "内部推理"}]), {}
-            yield AIMessageChunk(content="你好"), {}
+            yield AIMessageChunk(content="改写后的内部检索问题"), {
+                "langgraph_node": "tools",
+                "tags": ["query_rewrite"],
+            }
+            yield AIMessageChunk(content=[{"type": "reasoning", "reasoning": "内部推理"}]), {
+                "langgraph_node": "model",
+            }
+            yield AIMessageChunk(content="你好"), {"langgraph_node": "model"}
             assert f"context:{scene}:userid:1" not in redis.values or len(requests) > 1
-            yield AIMessageChunk(content="，请说"), {}
+            yield AIMessageChunk(content="，请说"), {"langgraph_node": "model"}
 
         return SimpleNamespace(astream=stream)
 
@@ -109,7 +115,7 @@ def test_interrupted_stream_preserves_previous_history(service, monkeypatch, age
     redis.values[key] = original
 
     async def stream(_payload, *, stream_mode):
-        yield AIMessageChunk(content="未完成的回答"), {}
+        yield AIMessageChunk(content="未完成的回答"), {"langgraph_node": "model"}
         raise failure("stream interrupted")
 
     monkeypatch.setattr(service, f"{agent_type}_agent", SimpleNamespace(astream=stream))
@@ -125,3 +131,56 @@ def test_interrupted_stream_preserves_previous_history(service, monkeypatch, age
     asyncio.run(consume())
     assert redis.values == {key: original}
     assert redis.expirations == {}
+
+
+@pytest.mark.parametrize("agent_type", ["guide", "support"])
+def test_real_agent_graph_keeps_rewrite_and_evidence_out_of_reply_and_history(
+    service, monkeypatch, agent_type
+):
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+
+    from app.tools import knowledge
+
+    class ToolCallingModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    model = ToolCallingModel(responses=[
+        AIMessage(content="", tool_calls=[{
+            "name": "query_knowledge",
+            "args": {"query": "新疆运费怎么算？"},
+            "id": "test-knowledge-call",
+            "type": "tool_call",
+        }]),
+        AIMessage(content="新疆地区首程配送运费如何收取？"),
+        AIMessage(content="新疆每单收取25元首程配送运费。"),
+    ])
+    queries = []
+
+    async def search(query):
+        queries.append(query)
+        return "【内部检索原文】新疆、西藏地区每单收取25元首程配送运费。"
+
+    monkeypatch.setattr(knowledge, "search_knowledge", search)
+    agent = create_agent(model=model, tools=[knowledge.create_knowledge_tool(model)])
+    monkeypatch.setattr(service, f"{agent_type}_agent", agent)
+    redis = MemoryRedis()
+
+    async def consume():
+        stream = getattr(service, f"stream_{agent_type}_answer")
+        return "".join([
+            text async for text in stream(
+                "1", "新疆运费怎么算？", ContextRepository(redis)
+            )
+        ])
+
+    answer = asyncio.run(consume())
+
+    assert answer == "新疆每单收取25元首程配送运费。"
+    assert queries == ["新疆地区首程配送运费如何收取？"]
+    assert json.loads(redis.values[f"context:{agent_type}:userid:1"]) == [
+        {"role": "user", "content": "新疆运费怎么算？"},
+        {"role": "assistant", "content": "新疆每单收取25元首程配送运费。"},
+    ]
