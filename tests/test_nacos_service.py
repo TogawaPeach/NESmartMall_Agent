@@ -1,10 +1,13 @@
+import asyncio
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
-from v2.nacos import NacosNamingService
+from v2.nacos import ClientConfigBuilder, NacosNamingService
+from v2.nacos.common.nacos_exception import NacosException
 
 
 @pytest.fixture
@@ -18,7 +21,7 @@ def redis_client(monkeypatch):
 
 
 @pytest.fixture
-def naming_client(monkeypatch, redis_client):
+def naming_client(monkeypatch, redis_client, tmp_path):
     # 单独运行本文件时，模型初始化也使用测试配置，不读取真实 .env。
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-api-key")
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -39,13 +42,26 @@ def naming_client(monkeypatch, redis_client):
     if module is not None:
         monkeypatch.setattr(module, "load_dotenv", lambda *_args, **_kwargs: False)
 
-    client = Mock(spec=NacosNamingService)
+    sdk_config = ClientConfigBuilder().server_address("127.0.0.1:8848").build()
+    sdk_config.log_dir = str(tmp_path)
+    sdk_config.cache_dir = str(tmp_path)
+    sdk_config.load_cache_at_start = False
+
+    async def create_sdk_client():
+        return NacosNamingService(sdk_config)
+
+    client = asyncio.run(create_sdk_client())
     client.register_instance = AsyncMock(return_value=True)
     client.deregister_instance = AsyncMock(return_value=True)
-    client.shutdown = AsyncMock()
+    # 保留真实 SDK 的 updater 和 shutdown，只隔离网络关闭操作。
+    client.grpc_client_proxy.close_client = AsyncMock()
     factory = AsyncMock(return_value=client)
     monkeypatch.setattr(NacosNamingService, "create_naming_service", factory)
-    return client, factory
+    yield client, factory
+    for handler in list(client.logger.handlers):
+        if Path(getattr(handler, "baseFilename", "")).parent == tmp_path:
+            client.logger.removeHandler(handler)
+            handler.close()
 
 
 def application():
@@ -73,7 +89,8 @@ def test_startup_registers_configured_instance_and_shutdown_removes_it(naming_cl
         assert instance.ip == "192.0.2.10"
         assert instance.port == 8090
         client.deregister_instance.assert_not_awaited()
-        client.shutdown.assert_not_awaited()
+        client.grpc_client_proxy.close_client.assert_not_awaited()
+        assert not client.service_info_updater.stop_event.is_set()
 
     removed = client.deregister_instance.await_args.args[0]
     assert (removed.service_name, removed.group_name, removed.ip, removed.port) == (
@@ -82,28 +99,31 @@ def test_startup_registers_configured_instance_and_shutdown_removes_it(naming_cl
         "192.0.2.10",
         8090,
     )
-    assert [call[0] for call in client.mock_calls] == [
-        "register_instance",
-        "deregister_instance",
-        "shutdown",
-    ]
+    client.grpc_client_proxy.close_client.assert_awaited_once()
+    assert client.service_info_updater.stop_event.is_set()
     redis_client.__aexit__.assert_awaited_once()
 
 
-@pytest.mark.parametrize("raises", [False, True])
-def test_registration_failure_stops_startup_and_closes_client(naming_client, redis_client, raises):
+@pytest.mark.parametrize(
+    "error",
+    [None, RuntimeError("registration unavailable"), NacosException(500, "DEADLINE_EXCEEDED")],
+)
+def test_registration_failure_stops_startup_and_closes_client(naming_client, redis_client, error):
     client, _factory = naming_client
-    if raises:
-        client.register_instance.side_effect = RuntimeError("registration unavailable")
+    if error is not None:
+        client.register_instance.side_effect = error
     else:
         client.register_instance.return_value = False
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(type(error) if error is not None else RuntimeError) as caught:
         with TestClient(application()):
             pytest.fail("Registration failure must prevent startup")
 
+    if error is not None:
+        assert caught.value is error
     client.deregister_instance.assert_not_awaited()
-    client.shutdown.assert_awaited_once()
+    client.grpc_client_proxy.close_client.assert_awaited_once()
+    assert client.service_info_updater.stop_event.is_set()
     redis_client.__aexit__.assert_awaited_once()
 
 
@@ -125,4 +145,16 @@ def test_deregistration_failure_still_closes_client(naming_client):
     with pytest.raises(RuntimeError, match="deregistration unavailable"):
         with TestClient(application()):
             pass
-    client.shutdown.assert_awaited_once()
+    client.grpc_client_proxy.close_client.assert_awaited_once()
+    assert client.service_info_updater.stop_event.is_set()
+
+
+def test_connection_close_failure_still_stops_updater(naming_client):
+    client, _factory = naming_client
+    client.grpc_client_proxy.close_client.side_effect = RuntimeError("close unavailable")
+
+    with pytest.raises(RuntimeError, match="close unavailable"):
+        with TestClient(application()):
+            pass
+
+    assert client.service_info_updater.stop_event.is_set()

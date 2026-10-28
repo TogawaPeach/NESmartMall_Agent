@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from inspect import isawaitable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -48,4 +49,10 @@ async def nacos_lifespan(_app: FastAPI):
             if registered:
                 await client.deregister_instance(DeregisterInstanceParam(**instance))
         finally:
-            await client.shutdown()
+            # SDK 2.0.11 的 shutdown() 错误地 await 同步 stop()，会掩盖注册异常。
+            try:
+                await client.grpc_client_proxy.close_client()
+            finally:
+                stopped = client.service_info_updater.stop()
+                if isawaitable(stopped):
+                    await stopped
