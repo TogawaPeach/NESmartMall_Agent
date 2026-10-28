@@ -1,10 +1,14 @@
 import os
+import threading
 from functools import lru_cache
 
 from dotenv import load_dotenv
 from pymilvus import MilvusClient
 
 from app.knowledge.documents import PROJECT_ROOT
+
+_LOAD_LOCK = threading.Lock()
+_LOADED_COLLECTIONS: set[str] = set()
 
 
 @lru_cache(maxsize=1)
@@ -18,6 +22,24 @@ def get_milvus_client() -> MilvusClient:
         token=os.getenv("MILVUS_TOKEN", ""),
         timeout=10,
     )
+
+
+def ensure_collection_loaded(
+    client: MilvusClient,
+    collection_name: str,
+    *,
+    force: bool = False,
+) -> None:
+    """确保集合处于 Loaded 状态，避免 Released 状态下检索直接报错。"""
+    if not force and collection_name in _LOADED_COLLECTIONS:
+        return
+
+    with _LOAD_LOCK:
+        # 双重检查，避免并发请求重复 load
+        if not force and collection_name in _LOADED_COLLECTIONS:
+            return
+        client.load_collection(collection_name=collection_name)
+        _LOADED_COLLECTIONS.add(collection_name)
 
 
 if __name__ == "__main__":

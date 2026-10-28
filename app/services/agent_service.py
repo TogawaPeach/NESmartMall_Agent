@@ -9,7 +9,11 @@ from langchain.chat_models import init_chat_model
 from app.repositories.context_repository import AgentType, ContextRepository
 from app.schemas.agent_context import AgentContext
 from app.tools.knowledge import create_knowledge_tool
-from app.tools.order import create_order_tool
+from app.tools.order import (
+    create_order_products_tool,
+    create_order_tool,
+    create_user_orders_tool,
+)
 
 # 加载项目根目录的 .env
 env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -25,7 +29,10 @@ model = init_chat_model(
 )
 
 query_knowledge = create_knowledge_tool(model)
-query_order = create_order_tool(os.getenv("MALL_GATEWAY_BASE_URL", "http://localhost:8080"))
+gateway_base_url = os.environ["MALL_GATEWAY_BASE_URL"]
+query_order = create_order_tool(gateway_base_url)
+query_order_products = create_order_products_tool(gateway_base_url)
+query_user_orders = create_user_orders_tool(gateway_base_url)
 
 KNOWLEDGE_PROMPT = (
     "涉及商城政策、规则及已入库的商品说明时，必须先调用 query_knowledge。"
@@ -57,7 +64,7 @@ guide_agent = create_agent(
 # 客服 Agent：负责商品使用及售前售后咨询
 support_agent = create_agent(
     model=model,
-    tools=[query_knowledge, query_order],
+    tools=[query_knowledge, query_order, query_order_products, query_user_orders],
     system_prompt=(
         "你是经纬智选商城的资深客服助手，语气亲切、回答简洁，不用网络烂梗。请用中文回答。严禁输出MarkDown格式文本"
         "我们的商城是一个测绘工具B2C平台，只有一个商家，专门卖关于测绘的用品"

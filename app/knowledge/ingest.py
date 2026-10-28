@@ -1,6 +1,6 @@
 import os
 
-from app.knowledge.milvus import get_milvus_client
+from app.knowledge.milvus import ensure_collection_loaded, get_milvus_client
 from app.knowledge.vectorize import vectorize_policy_documents
 
 DOCUMENT_ID = "JW-POLICY-001"
@@ -22,7 +22,7 @@ def ingest_policy_documents() -> int:
             consistency_level="Strong",
         )
 
-    client.load_collection(collection_name=collection_name)
+    ensure_collection_loaded(client, collection_name, force=True)
 
     # 加载、切块、生成向量
     chunks, vectors = vectorize_policy_documents()

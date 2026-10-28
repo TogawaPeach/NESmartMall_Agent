@@ -6,6 +6,10 @@ from uplink import AiohttpClient, Consumer, Path, get
 
 
 class JavaClient(Consumer):
+    @get("api/orders")
+    def get_user_orders(self):
+        """查询当前登录用户的全部订单。"""
+
     @get("api/orders/{order_no}")
     def get_order_detail(self, order_no: Path):
         """查询当前用户的订单详情，请求头由客户端统一设置。"""

@@ -122,12 +122,8 @@ def test_concurrent_order_queries_keep_each_requests_jwt():
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    ("status", "error"),
-    [(401, "UNAUTHORIZED"), (403, "UNAUTHORIZED"), (404, "ORDER_NOT_ACCESSIBLE"),
-     (500, "SERVICE_ERROR"), (302, "SERVICE_ERROR")],
-)
-def test_http_failure_does_not_return_order_data(status, error):
+@pytest.mark.parametrize("status", [401, 403, 404, 500, 302])
+def test_http_failure_returns_one_clear_error_without_order_data(status):
     from app.tools.order import create_order_tool
 
     async def run():
@@ -136,8 +132,7 @@ def test_http_failure_does_not_return_order_data(status, error):
 
         async with gateway(handler) as base_url:
             result = await query(create_order_tool(base_url))
-            assert result["error"] == error
-            assert "status" not in result
+            assert result == {"error": "订单查询失败，请稍后重试。"}
             assert "private" not in str(result)
 
     asyncio.run(run())
@@ -152,25 +147,24 @@ def test_malformed_response_does_not_crash_the_agent(payload):
             return web.json_response(payload)
 
         async with gateway(handler) as base_url:
-            assert (await query(create_order_tool(base_url)))["error"] == "SERVICE_ERROR"
+            assert (await query(create_order_tool(base_url))) == {
+                "error": "订单查询失败，请稍后重试。"
+            }
 
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    ("authorization", "order_no", "error"),
-    [("", "JW1", "UNAUTHORIZED"), ("Bearer user-a", "../orders/JW1", "INVALID_ORDER_NO")],
-)
-def test_invalid_input_does_not_send_a_request(authorization, order_no, error):
+@pytest.mark.parametrize("order_no", ["", "JW1x", "../orders/JW1"])
+def test_invalid_order_no_does_not_send_a_request(order_no):
     from app.tools.order import create_order_tool
 
     async def run():
         async def handler(_request):
-            pytest.fail("invalid input must not reach the gateway")
+            pytest.fail("invalid order_no must not reach the gateway")
 
         async with gateway(handler) as base_url:
-            result = await query(create_order_tool(base_url), authorization, order_no)
-            assert result["error"] == error
+            result = await query(create_order_tool(base_url), order_no=order_no)
+            assert result == {"error": "订单号格式不正确，请核对。"}
 
     asyncio.run(run())
 
@@ -211,4 +205,4 @@ def test_timeout_returns_a_query_failure(monkeypatch):
 
     monkeypatch.setattr(JavaClient, "get_order_detail", timeout)
     result = asyncio.run(query(order.create_order_tool("http://127.0.0.1:8080")))
-    assert result["error"] == "TIMEOUT"
+    assert result == {"error": "订单查询失败，请稍后重试。"}
