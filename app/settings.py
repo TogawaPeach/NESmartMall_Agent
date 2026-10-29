@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,3 +24,9 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/1",
         min_length=1,
     )
+    mysql_host: str
+    mysql_port: int = 3306
+    mysql_user: str
+    mysql_password: SecretStr
+    mysql_database: str
+    snowflake_instance: int = 1

@@ -1,5 +1,6 @@
 import json
-from typing import Literal
+from typing import Any, Literal
+from uuid import uuid4
 
 from redis.asyncio import Redis
 
@@ -51,3 +52,41 @@ class ContextRepository:
             json.dumps(history, ensure_ascii=False),
             ex=CONTEXT_TTL,
         )
+
+    async def create_handoff_action(
+        self,
+        user_id: str,
+        history: list[dict[str, str]],
+        text: str,
+    ) -> str:
+        """保存本轮之前的历史和本轮消息，返回按钮动作标识。"""
+        action_id = uuid4().hex
+        key = f"handoff:support:userid:{user_id}:action:{action_id}"
+
+        await self.redis.set(
+            key,
+            json.dumps(
+                {
+                    "history": history,
+                    "text": text,
+                },
+                ensure_ascii=False,
+            ),
+            ex=CONTEXT_TTL,
+        )
+
+        return action_id
+
+    async def get_handoff_action(
+        self,
+        user_id: str,
+        action_id: str,
+    ) -> dict[str, Any] | None:
+        """点击按钮时，读取当前用户对应的聊天快照。"""
+        key = f"handoff:support:userid:{user_id}:action:{action_id}"
+        value = await self.redis.get(key)
+
+        if value is None:
+            return None
+
+        return json.loads(value)

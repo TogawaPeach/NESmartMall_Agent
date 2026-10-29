@@ -1,6 +1,5 @@
 import asyncio
 import json
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -35,7 +34,7 @@ def service(monkeypatch):
 
 @pytest.mark.parametrize("agent_type", ["guide", "support"])
 def test_stream_endpoint_remembers_turns_and_saves_complete_answers(
-    service, monkeypatch, agent_type
+    service, monkeypatch, agent_type, patch_stream
 ):
     from app.api.agent import router
 
@@ -60,10 +59,9 @@ def test_stream_endpoint_remembers_turns_and_saves_complete_answers(
             assert f"context:{scene}:userid:1" not in redis.values or len(requests) > 1
             yield AIMessageChunk(content="，请说"), {"langgraph_node": "model"}
 
-        return SimpleNamespace(astream=stream)
+        return stream
 
-    monkeypatch.setattr(service, "guide_agent", make_agent("guide"))
-    monkeypatch.setattr(service, "support_agent", make_agent("support"))
+    patch_stream(service, agent_type, make_agent(agent_type))
 
     with TestClient(app) as client:
         response = client.post(
@@ -103,7 +101,7 @@ def test_stream_endpoint_remembers_turns_and_saves_complete_answers(
 
 @pytest.mark.parametrize("agent_type", ["guide", "support"])
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
-def test_interrupted_stream_preserves_previous_history(service, monkeypatch, agent_type, failure):
+def test_interrupted_stream_preserves_previous_history(service, agent_type, failure, patch_stream):
     redis = MemoryRedis()
     key = f"context:{agent_type}:userid:1"
     original = json.dumps(
@@ -118,7 +116,7 @@ def test_interrupted_stream_preserves_previous_history(service, monkeypatch, age
         yield AIMessageChunk(content="未完成的回答"), {"langgraph_node": "model"}
         raise failure("stream interrupted")
 
-    monkeypatch.setattr(service, f"{agent_type}_agent", SimpleNamespace(astream=stream))
+    patch_stream(service, agent_type, stream)
 
     async def consume():
         answer = getattr(service, f"stream_{agent_type}_answer")
@@ -133,7 +131,7 @@ def test_interrupted_stream_preserves_previous_history(service, monkeypatch, age
     assert redis.expirations == {}
 
 
-@pytest.mark.parametrize("agent_type", ["guide", "support"])
+@pytest.mark.parametrize("agent_type", ["guide"])
 def test_real_agent_graph_keeps_rewrite_and_evidence_out_of_reply_and_history(
     service, monkeypatch, agent_type
 ):
@@ -186,7 +184,7 @@ def test_real_agent_graph_keeps_rewrite_and_evidence_out_of_reply_and_history(
     ]
 
 
-def test_support_endpoint_passes_current_jwt_without_saving_it(service, monkeypatch):
+def test_support_endpoint_passes_current_jwt_without_saving_it(service, patch_stream):
     from app.api.agent import router
 
     redis = MemoryRedis()
@@ -201,7 +199,7 @@ def test_support_endpoint_passes_current_jwt_without_saving_it(service, monkeypa
         assert "Bearer" not in str(payload)
         yield AIMessageChunk(content="已查询订单。"), {"langgraph_node": "model"}
 
-    monkeypatch.setattr(service, "support_agent", SimpleNamespace(astream=stream))
+    patch_stream(service, "support", stream)
 
     with TestClient(app) as client:
         for token in ("Bearer initial-jwt", "Bearer refreshed-jwt"):

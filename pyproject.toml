@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "经纬智选商城 Agent 客服 Python 服务"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "asyncmy>=0.2.17",
     "fastapi>=0.115,<1",
     "langchain>=1,<2",
     "langchain-community>=0.4.2",
@@ -15,6 +16,7 @@ dependencies = [
     "pymilvus>=2.6,<2.7",
     "python-dotenv>=1,<2",
     "redis>=8.1.0,<9",
+    "snowflake-id>=1.0.2",
     "uplink[aiohttp]>=0.10,<1",
     "uvicorn[standard]>=0.30,<1",
 ]

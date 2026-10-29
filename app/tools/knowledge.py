@@ -5,13 +5,13 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool, tool
 
-from app.knowledge.retrieval import search_knowledge
+from app.knowledge.retrieval import search_knowledge, search_knowledge_candidates
 
 logger = logging.getLogger(__name__)
 
 
-def create_knowledge_tool(model: BaseChatModel) -> BaseTool:
-    """使用现有聊天模型创建知识检索工具。"""
+def create_query_rewriter(model: BaseChatModel):
+    """导购工具与客服 Workflow 共用问题改写。"""
     rewrite_prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -27,6 +27,32 @@ def create_knowledge_tool(model: BaseChatModel) -> BaseTool:
     )
     rewrite_chain = rewrite_prompt | model | StrOutputParser()
 
+    async def rewrite_query(query: str) -> str:
+        try:
+            rewritten = await rewrite_chain.ainvoke(
+                {"query": query}, config={"tags": ["query_rewrite"]},
+            )
+            return rewritten.strip() or query
+        except Exception:
+            logger.warning("检索问题改写失败，使用原问题继续检索。")
+            return query
+
+    return rewrite_query
+
+
+def create_knowledge_retriever(model: BaseChatModel):
+    rewrite_query = create_query_rewriter(model)
+
+    async def retrieve(query: str):
+        return await search_knowledge_candidates(await rewrite_query(query))
+
+    return retrieve
+
+
+def create_knowledge_tool(model: BaseChatModel) -> BaseTool:
+    """使用现有聊天模型创建知识检索工具。"""
+    rewrite_query = create_query_rewriter(model)
+
     @tool
     async def query_knowledge(query: str) -> str:
         """检索商城知识库中的政策、规则和商品说明等已入库内容。
@@ -38,16 +64,6 @@ def create_knowledge_tool(model: BaseChatModel) -> BaseTool:
         if not query:
             return "请提供需要查询的完整问题。"
 
-        try:
-            rewritten = await rewrite_chain.ainvoke(
-                {"query": query},
-                config={"tags": ["query_rewrite"]},
-            )
-            search_query = rewritten.strip() or query
-        except Exception:
-            logger.warning("检索问题改写失败，使用原问题继续检索。")
-            search_query = query
-
-        return await search_knowledge(search_query)
+        return await search_knowledge(await rewrite_query(query))
 
     return query_knowledge

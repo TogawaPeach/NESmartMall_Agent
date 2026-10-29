@@ -51,6 +51,36 @@ def test_retrieval_embeds_question_and_returns_text_without_metadata(monkeypatch
     assert observed["load_calls"] == 1
 
 
+def test_structured_retrieval_keeps_evidence_identity_score_and_source(monkeypatch):
+    from app.knowledge import milvus, retrieval
+
+    async def embed_query(_query):
+        return [0.25, 0.75]
+
+    client = SimpleNamespace(
+        load_collection=lambda **_: None,
+        search=lambda **_: [[{
+            "id": 5, "distance": 0.88,
+            "entity": {
+                "text": "新疆每单首程运费为25元。", "source": "policy.md",
+                "document_id": "JW-POLICY-001",
+            },
+        }]],
+    )
+    monkeypatch.setenv("MILVUS_COLLECTION", "test_knowledge")
+    monkeypatch.setattr(milvus, "_LOADED_COLLECTIONS", set())
+    monkeypatch.setattr(retrieval, "get_embedding_model", lambda: SimpleNamespace(
+        aembed_query=embed_query,
+    ))
+    monkeypatch.setattr(retrieval, "get_milvus_client", lambda: client)
+
+    assert asyncio.run(retrieval.search_knowledge_candidates("新疆运费？")) == [{
+        "id": 5, "score": 0.88, "score_type": "COSINE",
+        "text": "新疆每单首程运费为25元。", "source": "policy.md",
+        "document_id": "JW-POLICY-001",
+    }]
+
+
 def test_retrieval_does_not_disguise_database_failure_as_no_results(monkeypatch):
     from app.knowledge import milvus, retrieval
 

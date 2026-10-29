@@ -7,9 +7,13 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api.agent import router as agent_router
+from app.db.mysql import mysql_connection
 from app.db.redis import redis_connection
 from app.repositories.context_repository import ContextRepository
+from app.repositories.ticket_repository import TicketRepository
+from app.services.agent_service import model
 from app.services.nacos_service import nacos_lifespan
+from app.services.ticket_service import TicketService
 from app.settings import Settings
 
 
@@ -19,14 +23,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # 先连接 Redis，再注册 Nacos
         async with redis_connection(settings.redis_url) as redis:
             app.state.context_repository = ContextRepository(redis)
 
-            async with nacos_lifespan(app):
-                yield
+            async with mysql_connection(settings) as mysql_pool:
+                app.state.mysql_pool = mysql_pool
+                app.state.ticket_repository = TicketRepository(mysql_pool)
+                app.state.ticket_service = TicketService(
+                    model=model,
+                    repository=app.state.ticket_repository,
+                    instance=settings.snowflake_instance,
+                )
 
-        # 关闭时先注销 Nacos，再释放 Redis 连接
+                async with nacos_lifespan(app):
+                    yield
 
     application = FastAPI(
         lifespan=lifespan,

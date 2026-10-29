@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from typing import TypedDict
 
 from pymilvus.exceptions import MilvusException
 
@@ -24,8 +25,17 @@ def _is_not_loaded_error(exc: MilvusException) -> bool:
     return any(hint in message for hint in _NOT_LOADED_HINTS)
 
 
-async def search_knowledge(query: str, top_k: int = 4) -> str:
-    """将问题向量化，返回检索到的候选知识文本。"""
+class KnowledgeCandidate(TypedDict):
+    id: int
+    score: float
+    score_type: str
+    text: str
+    source: str
+    document_id: str
+
+
+async def search_knowledge_candidates(query: str, top_k: int = 4) -> list[KnowledgeCandidate]:
+    """保留候选标识、原文、分数和来源，供 Workflow 检查证据。"""
     embeddings = get_embedding_model()
     query_vector = await embeddings.aembed_query(query)
 
@@ -39,7 +49,7 @@ async def search_knowledge(query: str, top_k: int = 4) -> str:
                 data=[query_vector],
                 anns_field="vector",
                 limit=top_k,
-                output_fields=["text"],
+                output_fields=["text", "source", "document_id"],
                 search_params={"metric_type": "COSINE"},
                 consistency_level="Strong",
             )
@@ -64,13 +74,21 @@ async def search_knowledge(query: str, top_k: int = 4) -> str:
     loop = asyncio.get_running_loop()
     results = await loop.run_in_executor(_MILVUS_EXECUTOR, search)
 
-    if not results or not results[0]:
-        return "知识库没有查到相关资料。"
-
-    texts = [
-        hit["entity"]["text"]
+    return [
+        KnowledgeCandidate(
+            id=hit["id"],
+            score=hit["distance"],
+            score_type="COSINE",
+            text=hit["entity"]["text"],
+            source=hit["entity"].get("source", ""),
+            document_id=hit["entity"].get("document_id", ""),
+        )
         for hit in results[0]
         if hit["entity"].get("text")
-    ]
+    ] if results else []
 
-    return "\n\n".join(texts) or "知识库没有查到相关资料。"
+
+async def search_knowledge(query: str, top_k: int = 4) -> str:
+    """保持导购工具的文本返回契约。"""
+    candidates = await search_knowledge_candidates(query, top_k)
+    return "\n\n".join(hit["text"] for hit in candidates) or "知识库没有查到相关资料。"
