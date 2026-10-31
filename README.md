@@ -4,7 +4,6 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688)
 ![LangChain](https://img.shields.io/badge/LangChain-1-1C3C3C)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C)
-![DeepSeek](https://img.shields.io/badge/DeepSeek-4D6BFE)
 ![MySQL](https://img.shields.io/badge/MySQL-4479A1)
 ![Redis](https://img.shields.io/badge/Redis-DC382D)
 ![Milvus](https://img.shields.io/badge/Milvus-00A1EA)
